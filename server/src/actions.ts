@@ -7,6 +7,8 @@ import type {
   CancelAction,
   GatewayAction,
   LoginInputAction,
+  LoginInputKind,
+  LoginSubmitAction,
   SelectModelAction,
   SendMessageAction,
   SimulationResult,
@@ -18,6 +20,7 @@ export type ParseResult =
   | { ok: false };
 
 const LOGIN_STEPS = new Set(["start", "challenge", "verification"]);
+const LOGIN_INPUT_KINDS = new Set<LoginInputKind>(["email_address", "verification_code"]);
 const SIMULATION_RESULTS = new Set<SimulationResult>(["authenticated", "failed", "expired"]);
 
 function unexpectedKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
@@ -58,6 +61,28 @@ export function parseAction(value: unknown): ParseResult {
     } else if (Object.prototype.hasOwnProperty.call(value, "simulationResult")) {
       return { ok: false };
     }
+    return { ok: true, action, fingerprint: fingerprintOf(action) };
+  }
+  if (type === "login_submit") {
+    if (unexpectedKeys(value, ["type", "actionId", "kind", "value"])) {
+      return { ok: false };
+    }
+    if (
+      !isClientId(value.actionId) ||
+      typeof value.kind !== "string" ||
+      !LOGIN_INPUT_KINDS.has(value.kind as LoginInputKind) ||
+      typeof value.value !== "string" ||
+      value.value.length < 1 ||
+      value.value.length > 200
+    ) {
+      return { ok: false };
+    }
+    const action: LoginSubmitAction = {
+      type: "login_submit",
+      actionId: value.actionId,
+      kind: value.kind as LoginInputKind,
+      value: value.value,
+    };
     return { ok: true, action, fingerprint: fingerprintOf(action) };
   }
   if (type === "select_model") {

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertNavigationAllowed, NavigationRejectedError, type OriginRule } from "./allowlist.ts";
+import type { LoginInputKind } from "../types.ts";
 
 export class BrowserHostError extends Error {
   constructor(message: string) {
@@ -191,6 +192,22 @@ export class BrowserHost {
       { type: "mouseReleased", x, y, button: "left", clickCount: 1 },
       page.sessionId,
     );
+  }
+
+  async listLoginInputs(ownerId: string): Promise<LoginInputKind[]> {
+    const page = this.requireOpen(ownerId);
+    const value = await this.evaluate(page.sessionId, LIST_LOGIN_INPUTS);
+    const allowed: LoginInputKind[] = ["email_address", "verification_code"];
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return allowed.filter((kind) => value.includes(kind));
+  }
+
+  async submitLoginInput(ownerId: string, kind: LoginInputKind, value: string): Promise<"applied" | "missing"> {
+    const page = this.requireOpen(ownerId);
+    const result = await this.evaluate(page.sessionId, `(${SUBMIT_LOGIN_INPUT})(${JSON.stringify(kind)},${JSON.stringify(value)})`);
+    return result === "applied" ? "applied" : "missing";
   }
 
   async read(ownerId: string): Promise<{ title: string; visibleText: string }> {
@@ -391,5 +408,30 @@ async function waitUntilReady(
   }
   throw new BrowserHostError("Browser pipe was not ready.");
 }
+
+const LIST_LOGIN_INPUTS = `(() => {
+  const allowed = ["email_address", "verification_code"];
+  const found = [];
+  for (const el of document.querySelectorAll("[data-gateway-input]")) {
+    const kind = el.getAttribute("data-gateway-input");
+    if (!allowed.includes(kind)) continue;
+    if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) continue;
+    if (el.type === "password") continue;
+    if (!found.includes(kind)) found.push(kind);
+  }
+  return found;
+})()`;
+
+const SUBMIT_LOGIN_INPUT = `function submitLoginInput(kind, incoming) {
+  if (kind !== "email_address" && kind !== "verification_code") return "missing";
+  const el = document.querySelector('[data-gateway-input="' + kind + '"]');
+  if (!el || el.getAttribute("data-gateway-input") !== kind) return "missing";
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return "missing";
+  if (el.type === "password") return "missing";
+  el.focus();
+  el.value = incoming;
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  return "applied";
+}`;
 
 export { NavigationRejectedError };

@@ -10,7 +10,7 @@ iOS 将来只访问用户自己填写的一个 HTTPS 网关基址。Claude 网�
 - 网关访问令牌保护全部控制操作。令牌和 Claude 登录无关。
 - 会话、登录状态机、模型、消息、取消和 SSE 的 v0 契约。
 - 默认适配器 `unconfigured`：实时登录和实时模型明确返回 `not_configured`，不会假登录，也不会给出假的 Claude 模型列表。
-- 适配器 `browser`：网关认证通过后，可以为该会话打开隔离的本机浏览器上下文，并用 `browser_navigate`、`browser_read`、`browser_click`、`browser_screenshot` 操作允许列表里的页面。页面加载不是 Claude 登录。模型列表和发送仍是 `not_configured`。Claude 没有专用密码。普通请求登录页被 Cloudflare challenge 拦截，所以自动浏览器登录停止。
+- 适配器 `browser`：网关认证通过后，可以为该会话打开隔离的本机浏览器上下文，并用 `browser_navigate`、`browser_read`、`browser_click`、`browser_screenshot` 操作允许列表里的页面。登录输入走 `login_submit`，只接受该会话 `supportedInputs` 里的种类。密码不受支持。页面加载和夹具投递都不是 Claude 登录。模型列表和发送仍是 `not_configured`。普通请求登录页被 Cloudflare challenge 拦截，所以不会重试该路由。
 - 适配器 `mock`：只在测试里模拟状态和回声，响应用 `simulated: true` 标出。
 
 ## 明确没做

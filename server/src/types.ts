@@ -34,6 +34,7 @@ export type LoginState =
 
 export type ActionType =
   | "login_input"
+  | "login_submit"
   | "select_model"
   | "send_message"
   | "cancel"
@@ -41,6 +42,9 @@ export type ActionType =
   | "browser_read"
   | "browser_click"
   | "browser_screenshot";
+
+/** Kinds an iOS client may submit. Password is never one of them. */
+export type LoginInputKind = "email_address" | "verification_code";
 
 export type LoginStep = "start" | "challenge" | "verification";
 
@@ -50,6 +54,9 @@ export interface LoginView {
   loginId: string;
   state: LoginState;
   allowedActions: ActionType[];
+  /** Inputs this session context can accept right now. Empty means do not invent a field. */
+  supportedInputs: LoginInputKind[];
+  passwordLogin: "unsupported";
   /** True only after the mock adapter has driven this login record. */
   simulated: boolean;
 }
@@ -111,7 +118,8 @@ export type ErrorCode =
   | "browser_host_disabled"
   | "browser_host_unavailable"
   | "navigation_rejected"
-  | "automatic_action_stopped";
+  | "automatic_action_stopped"
+  | "login_input_unsupported";
 
 export interface PublicError {
   code: ErrorCode;
@@ -229,6 +237,13 @@ export type LoginInputAction = {
   simulationResult?: SimulationResult;
 };
 
+export type LoginSubmitAction = {
+  type: "login_submit";
+  actionId: string;
+  kind: LoginInputKind;
+  value: string;
+};
+
 export type SelectModelAction = {
   type: "select_model";
   actionId: string;
@@ -275,6 +290,7 @@ export type BrowserScreenshotAction = {
 
 export type GatewayAction =
   | LoginInputAction
+  | LoginSubmitAction
   | SelectModelAction
   | SendMessageAction
   | CancelAction

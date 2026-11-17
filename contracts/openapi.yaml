@@ -316,9 +316,16 @@ components:
         allowedActions:
           type: array
           items:
-            enum: [login_input, select_model, send_message, cancel, browser_navigate, browser_read, browser_click, browser_screenshot]
+            enum: [login_input, select_model, send_message, cancel, login_submit, browser_navigate, browser_read, browser_click, browser_screenshot]
         simulated:
           type: boolean
+        supportedInputs:
+          type: array
+          description: Kinds this session context can accept. Password is never listed. Empty means the client must not invent a login field.
+          items:
+            enum: [email_address, verification_code]
+        passwordLogin:
+          const: unsupported
     Model:
       type: object
       required: [id, displayName, available, simulated]
@@ -347,6 +354,7 @@ components:
     Action:
       oneOf:
         - $ref: "#/components/schemas/LoginInput"
+        - $ref: "#/components/schemas/LoginSubmit"
         - $ref: "#/components/schemas/SelectModel"
         - $ref: "#/components/schemas/SendMessage"
         - $ref: "#/components/schemas/Cancel"
@@ -369,6 +377,21 @@ components:
         simulationResult:
           enum: [authenticated, failed, expired]
           description: Mock adapter only. Ignored as success by the unconfigured adapter.
+    LoginSubmit:
+      type: object
+      required: [type, actionId, kind, value]
+      description: Value is accepted only when kind is in this session's supportedInputs. The client does not send a URL, selector, or script. The gateway does not log or store the plaintext value.
+      properties:
+        type:
+          const: login_submit
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+        kind:
+          enum: [email_address, verification_code]
+        value:
+          type: string
+          minLength: 1
+          maxLength: 200
     SelectModel:
       type: object
       required: [type, actionId, modelId]

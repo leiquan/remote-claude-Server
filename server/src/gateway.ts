@@ -21,6 +21,7 @@ import type {
   ConversationView,
   GatewayAction,
   HealthBody,
+  LoginInputKind,
   LoginState,
   LoginView,
   PublicError,
@@ -65,6 +66,7 @@ interface SessionRecord {
   loginId: string;
   loginState: LoginState;
   loginSimulated: boolean;
+  supportedInputs: LoginInputKind[];
   selectedModelId: string | null;
   conversation: ConversationView | null;
   actions: Map<string, StoredAction>;
@@ -160,11 +162,12 @@ export class Gateway {
     return { kind: "json", httpStatus: 201, body: { session: this.view(session) } };
   }
 
-  getSession(sessionId: string): GatewayResponse {
+  async getSession(sessionId: string): Promise<GatewayResponse> {
     const session = this.ownedSession(sessionId);
     if (!session) {
       return this.failure(404, publicError("session_not_found"));
     }
+    await this.refreshSupportedInputs(session);
     return { kind: "json", httpStatus: 200, body: { session: this.view(session) } };
   }
 
@@ -386,6 +389,9 @@ export class Gateway {
     if (action.type === "login_input") {
       return this.executeLogin(session, action, fingerprint);
     }
+    if (action.type === "login_submit") {
+      return this.executeLoginSubmit(session, action, fingerprint);
+    }
     if (action.type === "select_model") {
       return this.executeSelectModel(session, action, fingerprint);
     }
@@ -518,7 +524,80 @@ export class Gateway {
     }
   }
 
-  private storeBrowserResult(
+  private async executeLoginSubmit(
+    session: SessionRecord,
+    action: Extract<GatewayAction, { type: "login_submit" }>,
+    fingerprint: string,
+  ): Promise<GatewayResponse> {
+    if (this.adapter !== "browser" || !this.browserHost) {
+      session.supportedInputs = [];
+      return this.rejectAction(
+        session,
+        fingerprint,
+        409,
+        action.actionId,
+        null,
+        publicError("login_input_unsupported"),
+        "login_submit",
+      );
+    }
+    await this.refreshSupportedInputs(session);
+    if (!this.ownedSession(session.sessionId)) {
+      return this.failure(404, publicError("session_not_found"));
+    }
+    if (!session.supportedInputs.includes(action.kind)) {
+      return this.rejectAction(
+        session,
+        fingerprint,
+        409,
+        action.actionId,
+        null,
+        publicError("login_input_unsupported"),
+        "login_submit",
+      );
+    }
+    let applied = false;
+    try {
+      applied = (await this.browserHost.submitLoginInput(session.sessionId, action.kind, action.value)) === "applied";
+    } catch {
+      applied = false;
+    }
+    if (!this.ownedSession(session.sessionId)) {
+      return this.failure(404, publicError("session_not_found"));
+    }
+    await this.refreshSupportedInputs(session);
+    if (!applied) {
+      return this.rejectAction(
+        session,
+        fingerprint,
+        409,
+        action.actionId,
+        null,
+        publicError("login_input_unsupported"),
+        "login_submit",
+      );
+    }
+    return this.storeBrowserResult(
+      session,
+      fingerprint,
+      action.actionId,
+      "login_submit",
+      {
+        localAck: true,
+        siteAck: false,
+        claudeLoginVerified: false,
+        title: null,
+        visibleText: null,
+        screenshotPngBase64: null,
+        pageStop: "not_attempted",
+        upstream: "not_applicable",
+      },
+      null,
+      200,
+    );
+  }
+
+  private async storeBrowserResult(
     session: SessionRecord,
     fingerprint: string,
     actionId: string,
@@ -526,7 +605,8 @@ export class Gateway {
     browser: import("./types.ts").BrowserObservation,
     error: PublicError | null,
     httpStatus: number,
-  ): GatewayResponse {
+  ): Promise<GatewayResponse> {
+    await this.refreshSupportedInputs(session);
     const stored = this.storeAction(session, fingerprint, httpStatus, {
       actionId,
       requestId: null,
@@ -986,6 +1066,7 @@ export class Gateway {
       loginId: newId("log"),
       loginState: "unauthenticated",
       loginSimulated: false,
+      supportedInputs: [],
       selectedModelId: null,
       conversation: null,
       actions: new Map(),
@@ -1033,11 +1114,25 @@ export class Gateway {
     };
   }
 
+  private async refreshSupportedInputs(session: SessionRecord): Promise<void> {
+    if (this.adapter !== "browser" || !this.browserHost || !this.sessions.has(session.sessionId)) {
+      session.supportedInputs = [];
+      return;
+    }
+    try {
+      session.supportedInputs = await this.browserHost.listLoginInputs(session.sessionId);
+    } catch {
+      session.supportedInputs = [];
+    }
+  }
+
   private loginView(session: SessionRecord): LoginView {
     return {
       loginId: session.loginId,
       state: session.loginState,
       allowedActions: this.allowedActions(session),
+      supportedInputs: session.supportedInputs,
+      passwordLogin: "unsupported",
       simulated: session.loginSimulated,
     };
   }
@@ -1046,6 +1141,9 @@ export class Gateway {
     const actions: ActionType[] = [];
     if (this.adapter === "browser" && this.browserHost) {
       actions.push("browser_navigate", "browser_read", "browser_click", "browser_screenshot");
+      if (session.supportedInputs.length > 0) {
+        actions.push("login_submit");
+      }
     }
     if (this.adapter === "mock") {
       if (

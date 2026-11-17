@@ -111,6 +111,8 @@ mock 的对话字段 `text` 是最近一次被接受的用户文本，不是模�
 
 浏览器宿主是单独的本机 Chrome 进程，经 stdio 管道控制，没有 TCP 调试端口，默认不启动。网关认证通过之后才会为该会话创建独立浏览器上下文；未认证请求不会分配浏览器资源。`DELETE` 只关闭该会话自己的上下文，并丢掉迟到结果。`browserHost.claudeNavigation` 固定为 `disabled`，`liveLoginVerified` 固定为 `false`。页面加载或标题不是 Claude 登录证明。宿主只接受操作者写入 `BROWSER_ALLOWLIST` 的源站，匹配的是 scheme、主机和有效端口。导航离开允许列表，或标题像 challenge、forbidden、expired、unrecognized 时，停止继续自动操作，不回退到 mock。`browser_navigate`、`browser_read`、`browser_click`、`browser_screenshot` 的 `localAck` 只表示本机命令被执行；`siteAck` 固定为 `false`。没有真实页面证据时，模型列表保持为空，`select_model` 和 `send_message` 保持未配置。不确定是否发出的消息不会自动重试。程序不会把 Claude 放进允许列表，也不发明站点选择器。关闭页面时 `stop.page` 为 `attempted`，`stop.upstream` 为 `unknown`，不是 `confirmed_stopped`。
 
+`login_submit` 是给 iOS 用的登录输入。客户端只提交 `kind` 和短时 `value`，不能附带 URL、选择器或脚本。`kind` 必须出现在该会话当前的 `supportedInputs` 里。密码永远不在这个列表中，`passwordLogin` 固定为 `unsupported`。网关不把明文写入日志、审计或会话存储。值只在这一次投递里使用。当前能投递的页面绑定只有本仓库夹具上的 `data-gateway-input`，而且只认 `email_address` 和 `verification_code`。这不是 Claude 的选择器，投递成功也不表示 Claude 已登录。真实登录页没有经过核实的字段绑定，挑战页仍然禁止重试，所以对 Claude 页面 `supportedInputs` 为空。
+
 因此 `REMOTE_CLAUDE_ADAPTER=browser` 不表示已经登录。浏览器适配器上的删除若关闭了页面，只记录页面停止已尝试、上游状态未知。`browserLogin.passwordLogin` 固定为 `unsupported`，`verified` 固定为 `false`。`automatedAccess` 为 `blocked`，`blocker` 为 `cloudflare_challenge`。`login_input` 返回 `501 login_method_unavailable`，登录状态保持 `unauthenticated`。没有操作者在主机上完成 Google 登录或邮件验证之前，实时模型与对话仍是 `not_configured`。
 
 ## 明确不做

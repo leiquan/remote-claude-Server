@@ -29,6 +29,8 @@ const MESSAGES: Record<ErrorCode, string> = {
   navigation_rejected: "Browser navigation target was rejected. No fallback was used.",
   automatic_action_stopped: "Automatic browser action stopped. No fallback was used.",
   event_cursor_invalid: "Last-Event-ID does not match a retained event. Resync is required. The gateway will not resume a send.",
+  login_input_unsupported:
+    "This session context has no supported login input of that kind. Password login is not supported, and no Claude page binding is verified.",
 };
 
 const HTTP_STATUS: Record<ErrorCode, number> = {
@@ -59,6 +61,7 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   browser_host_unavailable: 503,
   navigation_rejected: 409,
   automatic_action_stopped: 409,
+  login_input_unsupported: 409,
 };
 
 export function publicError(code: ErrorCode, message?: string): PublicError {

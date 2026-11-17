@@ -167,7 +167,7 @@ export function createGatewayApp(options: AppOptions): GatewayApp {
     }
 
     if (matched.kind === "session" && req.method === "GET") {
-      writeGateway(res, gateway.getSession(matched.sessionId));
+      writeGateway(res, await gateway.getSession(matched.sessionId));
       return;
     }
     if (matched.kind === "session" && req.method === "DELETE") {
