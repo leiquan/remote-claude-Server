@@ -1,0 +1,551 @@
+openapi: 3.1.0
+info:
+  title: Remote Claude gateway
+  version: "0"
+  description: |
+    Personal gateway contract. This is not an Anthropic API and not a Claude
+    website session. protocolVersion is the field "0". Live Claude login is
+    not configured in this milestone. The mock adapter is simulated.
+  license:
+    name: Source available in this repository
+servers:
+  - url: https://gateway.example.invalid
+    description: Placeholder only. Not a deployed server.
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Gateway-local protocol detection
+      description: Success does not authorize control operations and does not mean Claude is usable.
+      security: []
+      responses:
+        "200":
+          description: Protocol identity and capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /sessions:
+    post:
+      operationId: createSession
+      summary: Create an empty session
+      security:
+        - gatewayBearer: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "201":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "503":
+          $ref: "#/components/responses/GatewayError"
+  /sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: getSession
+      security:
+        - gatewayBearer: []
+      responses:
+        "200":
+          description: Current session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "404":
+          $ref: "#/components/responses/GatewayError"
+    delete:
+      operationId: deleteSession
+      security:
+        - gatewayBearer: []
+      responses:
+        "204":
+          description: Deleted, or already deleted in this process
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "404":
+          $ref: "#/components/responses/GatewayError"
+  /sessions/{sessionId}/actions:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: performAction
+      security:
+        - gatewayBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Action"
+      responses:
+        "200":
+          description: Synchronous action result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResult"
+        "202":
+          description: Message accepted; completion arrives on the event stream
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResult"
+        "400":
+          $ref: "#/components/responses/GatewayError"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "404":
+          $ref: "#/components/responses/GatewayError"
+        "409":
+          description: Conflict, invalid state, or simulated-login requirement
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - $ref: "#/components/schemas/ActionResult"
+        "501":
+          description: Live Claude behavior is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResult"
+  /sessions/{sessionId}/events:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
+    get:
+      operationId: streamEvents
+      security:
+        - gatewayBearer: []
+      responses:
+        "200":
+          description: Server-sent events
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/StreamEvent"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "404":
+          $ref: "#/components/responses/GatewayError"
+        "409":
+          $ref: "#/components/responses/GatewayError"
+components:
+  securitySchemes:
+    gatewayBearer:
+      type: http
+      scheme: bearer
+      description: Gateway access token. Not a Claude credential.
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^ses_[0-9a-f]{32}$"
+  responses:
+    GatewayError:
+      description: Gateway error without credentials or upstream URLs
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Health:
+      type: object
+      required: [serviceId, protocolVersion, claudeUsable, adapter, capabilities, authentication, browserLogin, browserHost]
+      properties:
+        serviceId:
+          const: remote-claude-gateway
+        protocolVersion:
+          const: "0"
+        claudeUsable:
+          const: false
+        adapter:
+          enum: [unconfigured, mock, browser]
+        capabilities:
+          $ref: "#/components/schemas/Capabilities"
+        authentication:
+          type: object
+          required: [controlOperations, gatewayTokenConfigured, thisResponseAuthorizesControl]
+          properties:
+            controlOperations:
+              const: bearer
+            gatewayTokenConfigured:
+              type: boolean
+            thisResponseAuthorizesControl:
+              const: false
+        browserLogin:
+          $ref: "#/components/schemas/BrowserLogin"
+        browserHost:
+          $ref: "#/components/schemas/BrowserHost"
+    BrowserLogin:
+      type: object
+      required: [passwordLogin, verified, automatedAccess, blocker]
+      properties:
+        passwordLogin:
+          const: unsupported
+        verified:
+          const: false
+        automatedAccess:
+          enum: [not_attempted, blocked]
+        blocker:
+          type: ["string", "null"]
+          enum: [cloudflare_challenge, null]
+    BrowserHost:
+      type: object
+      required: [running, claudeNavigation, liveLoginVerified]
+      properties:
+        running:
+          type: boolean
+        claudeNavigation:
+          const: disabled
+        liveLoginVerified:
+          const: false
+    Capabilities:
+      type: object
+      required:
+        - protocolDetection
+        - gatewayAuth
+        - sessionLifecycle
+        - loginStateMachine
+        - eventStream
+        - cancellation
+        - claudeWebsiteLogin
+        - liveModelCatalog
+        - liveConversation
+      properties:
+        protocolDetection:
+          const: supported
+        gatewayAuth:
+          enum: [supported, not_configured]
+        sessionLifecycle:
+          const: supported
+        loginStateMachine:
+          const: supported
+        eventStream:
+          const: supported
+        cancellation:
+          const: supported
+        claudeWebsiteLogin:
+          enum: [not_configured, simulated]
+        liveModelCatalog:
+          enum: [not_configured, simulated]
+        liveConversation:
+          enum: [not_configured, simulated]
+    SessionEnvelope:
+      type: object
+      required: [session]
+      properties:
+        session:
+          $ref: "#/components/schemas/Session"
+    Session:
+      type: object
+      required:
+        - sessionId
+        - serviceId
+        - protocolVersion
+        - claudeUsable
+        - adapter
+        - capabilities
+        - login
+        - models
+        - modelsStatus
+        - selectedModelId
+        - conversation
+        - activeRequestIds
+      properties:
+        sessionId:
+          type: string
+        serviceId:
+          const: remote-claude-gateway
+        protocolVersion:
+          const: "0"
+        claudeUsable:
+          const: false
+        adapter:
+          enum: [unconfigured, mock, browser]
+        capabilities:
+          $ref: "#/components/schemas/Capabilities"
+        login:
+          $ref: "#/components/schemas/Login"
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/Model"
+        modelsStatus:
+          enum: [not_configured, simulated]
+        selectedModelId:
+          type: ["string", "null"]
+        conversation:
+          oneOf:
+            - $ref: "#/components/schemas/Conversation"
+            - type: "null"
+        activeRequestIds:
+          type: array
+          items:
+            type: string
+    Login:
+      type: object
+      required: [loginId, state, allowedActions, simulated]
+      properties:
+        loginId:
+          type: string
+        state:
+          enum: [unauthenticated, authenticating, verification_required, authenticated, expired, failed]
+        allowedActions:
+          type: array
+          items:
+            enum: [login_input, select_model, send_message, cancel, browser_navigate, browser_read, browser_click, browser_screenshot]
+        simulated:
+          type: boolean
+    Model:
+      type: object
+      required: [id, displayName, available, simulated]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        available:
+          type: boolean
+        simulated:
+          type: boolean
+    Conversation:
+      type: object
+      required: [conversationId, clientRequestId, modelId, text]
+      properties:
+        conversationId:
+          type: string
+        clientRequestId:
+          type: string
+        modelId:
+          type: string
+        text:
+          type: string
+          description: Latest accepted user text, not a model reply.
+    Action:
+      oneOf:
+        - $ref: "#/components/schemas/LoginInput"
+        - $ref: "#/components/schemas/SelectModel"
+        - $ref: "#/components/schemas/SendMessage"
+        - $ref: "#/components/schemas/Cancel"
+        - $ref: "#/components/schemas/BrowserNavigate"
+        - $ref: "#/components/schemas/BrowserRead"
+        - $ref: "#/components/schemas/BrowserClick"
+        - $ref: "#/components/schemas/BrowserScreenshot"
+      discriminator:
+        propertyName: type
+    LoginInput:
+      type: object
+      required: [type, actionId, step]
+      properties:
+        type:
+          const: login_input
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+        step:
+          enum: [start, challenge, verification]
+        simulationResult:
+          enum: [authenticated, failed, expired]
+          description: Mock adapter only. Ignored as success by the unconfigured adapter.
+    SelectModel:
+      type: object
+      required: [type, actionId, modelId]
+      properties:
+        type:
+          const: select_model
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+        modelId:
+          type: string
+    SendMessage:
+      type: object
+      required: [type, actionId, requestId, clientRequestId, modelId, text]
+      properties:
+        type:
+          const: send_message
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+        requestId:
+          $ref: "#/components/schemas/ClientId"
+        clientRequestId:
+          $ref: "#/components/schemas/ClientId"
+        modelId:
+          type: string
+        text:
+          type: string
+          minLength: 1
+          maxLength: 8000
+    Cancel:
+      type: object
+      required: [type, actionId, requestId]
+      properties:
+        type:
+          const: cancel
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+        requestId:
+          $ref: "#/components/schemas/ClientId"
+    BrowserNavigate:
+      type: object
+      required: [type, actionId, url]
+      properties:
+        type:
+          const: browser_navigate
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+        url:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    BrowserRead:
+      type: object
+      required: [type, actionId]
+      properties:
+        type:
+          const: browser_read
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+    BrowserClick:
+      type: object
+      required: [type, actionId, x, y]
+      properties:
+        type:
+          const: browser_click
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+        x:
+          type: integer
+          minimum: 0
+          maximum: 4000
+        y:
+          type: integer
+          minimum: 0
+          maximum: 4000
+    BrowserScreenshot:
+      type: object
+      required: [type, actionId]
+      properties:
+        type:
+          const: browser_screenshot
+        actionId:
+          $ref: "#/components/schemas/ClientId"
+    ClientId:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{1,80}$"
+    ActionResult:
+      type: object
+      required: [actionId, requestId, status, originalStatus, originalActionId, error, session]
+      properties:
+        actionId:
+          type: string
+        requestId:
+          type: ["string", "null"]
+        status:
+          enum: [accepted, rejected, duplicate]
+        originalStatus:
+          type: ["string", "null"]
+          enum: [accepted, rejected, null]
+        originalActionId:
+          type: ["string", "null"]
+        error:
+          oneOf:
+            - $ref: "#/components/schemas/Error"
+            - type: "null"
+        session:
+          $ref: "#/components/schemas/Session"
+        browser:
+          $ref: "#/components/schemas/BrowserObservation"
+    BrowserObservation:
+      type: object
+      required: [localAck, siteAck, claudeLoginVerified, title, visibleText, screenshotPngBase64, pageStop, upstream]
+      description: Local observation only. A loaded page or title is not a Claude login, and localAck is not site acknowledgement.
+      properties:
+        localAck:
+          const: true
+        siteAck:
+          const: false
+        claudeLoginVerified:
+          const: false
+        title:
+          type: ["string", "null"]
+        visibleText:
+          type: ["string", "null"]
+        screenshotPngBase64:
+          type: ["string", "null"]
+        pageStop:
+          enum: [not_attempted, attempted]
+        upstream:
+          enum: [unknown, not_applicable]
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/Error"
+    Error:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          const: false
+    StreamEvent:
+      type: object
+      required: [eventId, type, requestId, actionId, simulated]
+      properties:
+        eventId:
+          type: string
+        type:
+          enum: [delta, completed, error, auth_required, cancelled, login_state]
+        requestId:
+          type: ["string", "null"]
+        actionId:
+          type: ["string", "null"]
+        simulated:
+          type: boolean
+        delta:
+          type: string
+        error:
+          $ref: "#/components/schemas/Error"
+        sourceActionId:
+          type: string
+        cause:
+          enum: [client_cancel, session_deleted, subscriber_disconnect]
+        stop:
+          type: object
+          description: Closing a page or an SSE socket does not prove upstream Claude compute stopped.
+          required: [localForwarding, page, upstream]
+          properties:
+            localForwarding:
+              const: stopped
+            page:
+              enum: [not_attempted, attempted]
+            upstream:
+              enum: [not_applicable, unknown]
+        login:
+          $ref: "#/components/schemas/Login"

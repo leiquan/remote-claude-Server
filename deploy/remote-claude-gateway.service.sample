@@ -1,0 +1,21 @@
+# Sample unit. Do not copy this over an existing unit.
+# Install only as a new name: remote-claude-gateway.service
+# Put the real token in a mode 0600 EnvironmentFile that is not in git.
+
+[Unit]
+Description=Remote Claude single-operator gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/remote-claude
+Environment=GATEWAY_BIND_HOST=127.0.0.1
+Environment=GATEWAY_PORT=43123
+Environment=REMOTE_CLAUDE_ADAPTER=unconfigured
+Environment=BROWSER_HOST=disabled
+EnvironmentFile=-/etc/remote-claude/gateway.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
