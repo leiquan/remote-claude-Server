@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
-import { ConfigError, normalizeBasePath } from "./config.ts";
+import { ConfigError, normalizeBasePath, type OfficialApiConfig } from "./config.ts";
 import { publicError } from "./errors.ts";
 import type { BrowserHost } from "./browser/host.ts";
 import { Gateway, type GatewayResponse } from "./gateway.ts";
@@ -20,6 +20,7 @@ export interface AppOptions {
   audit?: (record: AuditRecord) => void;
   browserHostRunning?: boolean;
   browserHost?: BrowserHost | null;
+  officialApi?: OfficialApiConfig | null;
 }
 
 export interface GatewayApp {
@@ -57,6 +58,7 @@ export function createGatewayApp(options: AppOptions): GatewayApp {
     audit,
     browserHostRunning: options.browserHostRunning,
     browserHost: options.browserHost,
+    officialApi: options.officialApi,
   });
   const server = createServer((req, res) => {
     void handle(req, res).catch(() => {

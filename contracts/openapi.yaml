@@ -182,7 +182,7 @@ components:
         claudeUsable:
           const: false
         adapter:
-          enum: [unconfigured, mock, browser]
+          enum: [unconfigured, mock, browser, api]
         capabilities:
           $ref: "#/components/schemas/Capabilities"
         authentication:
@@ -284,7 +284,7 @@ components:
         claudeUsable:
           const: false
         adapter:
-          enum: [unconfigured, mock, browser]
+          enum: [unconfigured, mock, browser, api]
         capabilities:
           $ref: "#/components/schemas/Capabilities"
         login:

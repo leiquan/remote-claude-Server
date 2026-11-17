@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { messageFingerprint, parseAction } from "./actions.ts";
+import { AnthropicMessages, OfficialApiError, toDescriptors } from "./anthropic.ts";
+import type { OfficialApiConfig } from "./config.ts";
 import { AutomaticActionStopped, BrowserHost } from "./browser/host.ts";
 import { NavigationRejectedError } from "./browser/allowlist.ts";
 import {
@@ -24,6 +26,7 @@ import type {
   LoginInputKind,
   LoginState,
   LoginView,
+  ModelDescriptor,
   PublicError,
   SessionView,
   StreamEvent,
@@ -47,6 +50,7 @@ interface StoredRequest {
   messageFingerprint: string;
   status: RequestStatus;
   timer: NodeJS.Timeout | null;
+  abort: AbortController | null;
 }
 
 interface StoredAction {
@@ -67,6 +71,7 @@ interface SessionRecord {
   loginState: LoginState;
   loginSimulated: boolean;
   supportedInputs: LoginInputKind[];
+  apiModels: ModelDescriptor[];
   selectedModelId: string | null;
   conversation: ConversationView | null;
   actions: Map<string, StoredAction>;
@@ -84,6 +89,7 @@ export interface GatewayOptions {
   audit?: (record: AuditRecord) => void;
   browserHostRunning?: boolean;
   browserHost?: BrowserHost | null;
+  officialApi?: OfficialApiConfig | null;
 }
 
 export type GatewayResponse =
@@ -106,6 +112,9 @@ export class Gateway {
   private readonly audit: (record: AuditRecord) => void;
   private readonly browserHostRunning: boolean;
   private readonly browserHost: BrowserHost | null;
+  private readonly anthropic: AnthropicMessages | null;
+  private readonly pinnedModelId: string | null;
+  private readonly apiTimeout: number;
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly tombstones = new Set<string>();
 
@@ -117,6 +126,9 @@ export class Gateway {
     this.audit = options.audit ?? (() => undefined);
     this.browserHost = options.browserHost ?? null;
     this.browserHostRunning = options.browserHostRunning ?? this.browserHost !== null;
+    this.anthropic = options.officialApi ? new AnthropicMessages(options.officialApi) : null;
+    this.pinnedModelId = options.officialApi?.pinnedModelId ?? null;
+    this.apiTimeout = options.officialApi?.timeoutMs ?? 30_000;
   }
 
   health(): HealthBody {
@@ -142,6 +154,12 @@ export class Gateway {
         claudeNavigation: "disabled",
         liveLoginVerified: false,
       },
+      officialApi: {
+        provider: "anthropic",
+        enabled: this.adapter === "api",
+        configured: this.adapter === "api" && (this.anthropic?.configured ?? false),
+        liveVerified: false,
+      },
     };
   }
 
@@ -155,6 +173,19 @@ export class Gateway {
         await this.browserHost.openSession(session.sessionId);
       } catch {
         return this.failure(503, publicError("browser_host_unavailable"));
+      }
+    }
+    if (this.adapter === "api" && this.anthropic?.configured) {
+      try {
+        const listed = await this.anthropic.listModels(AbortSignal.timeout(this.apiTimeoutMs()));
+        session.apiModels = toDescriptors(listed);
+      } catch {
+        this.audit({
+          event: "api_models_unavailable",
+          code: "api_upstream_rejected",
+          httpStatus: 201,
+          sessionId: session.sessionId,
+        });
       }
     }
     this.sessions.set(session.sessionId, session);
@@ -698,6 +729,22 @@ export class Gateway {
     action: Extract<GatewayAction, { type: "select_model" }>,
     fingerprint: string,
   ): GatewayResponse {
+    if (this.adapter === "api") {
+      const known = session.apiModels.some((model) => model.id === action.modelId);
+      if (!known || (this.pinnedModelId !== null && action.modelId !== this.pinnedModelId)) {
+        return this.rejectAction(session, fingerprint, 409, action.actionId, null, publicError("model_unavailable"), "select_model");
+      }
+      session.selectedModelId = action.modelId;
+      this.audit({ event: "model_selected", sessionId: session.sessionId, actionType: "select_model", httpStatus: 200 });
+      const stored = this.storeAction(session, fingerprint, 200, {
+        actionId: action.actionId,
+        requestId: null,
+        originalActionId: null,
+        outcome: "accepted",
+        error: null,
+      });
+      return this.firstResult(session, stored);
+    }
     if (this.adapter !== "mock") {
       return this.rejectAction(session, fingerprint, 501, action.actionId, null, NOT_CONFIGURED_MODELS, "select_model");
     }
@@ -740,11 +787,145 @@ export class Gateway {
     return this.firstResult(session, stored);
   }
 
+  private executeApiSend(
+    session: SessionRecord,
+    action: Extract<GatewayAction, { type: "send_message" }>,
+    fingerprint: string,
+  ): GatewayResponse {
+    if (!this.anthropic?.configured) {
+      const error = publicError("not_configured", "The official API key is not configured.");
+      this.rememberTerminalRequest(session, action, "rejected");
+      this.emit(session, {
+        type: "error",
+        requestId: action.requestId,
+        actionId: action.actionId,
+        simulated: false,
+        error,
+      });
+      return this.rejectAction(session, fingerprint, 501, action.actionId, action.requestId, error, "send_message");
+    }
+    if ([...session.requests.values()].some((request) => request.status === "streaming")) {
+      return this.rejectAction(
+        session,
+        fingerprint,
+        409,
+        action.actionId,
+        action.requestId,
+        publicError("invalid_state", "A generation is already running."),
+        "send_message",
+      );
+    }
+    if (session.selectedModelId !== action.modelId || !session.apiModels.some((model) => model.id === action.modelId)) {
+      const error = publicError(session.selectedModelId == null ? "invalid_state" : "model_unavailable");
+      this.rememberTerminalRequest(session, action, "rejected");
+      this.emit(session, {
+        type: "error",
+        requestId: action.requestId,
+        actionId: action.actionId,
+        simulated: false,
+        error,
+      });
+      return this.rejectAction(session, fingerprint, 409, action.actionId, action.requestId, error, "send_message");
+    }
+    const request = this.rememberTerminalRequest(session, action, "streaming");
+    const abort = new AbortController();
+    request.abort = abort;
+    request.timer = setTimeout(() => abort.abort(), this.apiTimeoutMs());
+    session.conversation = {
+      conversationId: session.conversation?.conversationId ?? newId("cnv"),
+      clientRequestId: action.clientRequestId,
+      modelId: action.modelId,
+      text: action.text,
+    };
+    void this.pumpApi(session, request);
+    this.audit({
+      event: "message_accepted",
+      sessionId: session.sessionId,
+      actionType: "send_message",
+      requestId: action.requestId,
+      httpStatus: 202,
+    });
+    const stored = this.storeAction(session, fingerprint, 202, {
+      actionId: action.actionId,
+      requestId: action.requestId,
+      originalActionId: null,
+      outcome: "accepted",
+      error: null,
+    });
+    return this.firstResult(session, stored);
+  }
+
+  private async pumpApi(session: SessionRecord, request: StoredRequest): Promise<void> {
+    try {
+      await this.anthropic?.streamMessage({
+        model: request.modelId,
+        text: request.text,
+        signal: request.abort?.signal ?? AbortSignal.abort(),
+        onText: (delta) => {
+          if (request.status !== "streaming") {
+            return;
+          }
+          this.emit(session, {
+            type: "delta",
+            requestId: request.requestId,
+            actionId: request.actionId,
+            simulated: false,
+            delta,
+          });
+        },
+      });
+      if (request.status === "streaming") {
+        this.finishRequest(session, request, {
+          type: "completed",
+          requestId: request.requestId,
+          actionId: request.actionId,
+          simulated: false,
+        });
+      }
+    } catch (error) {
+      if (request.status !== "streaming") {
+        return;
+      }
+      const code = error instanceof OfficialApiError ? error.code : "api_upstream_rejected";
+      const publicCode = code === "api_not_configured" ? "not_configured" : code === "model_unavailable" ? "model_unavailable" : "api_upstream_rejected";
+      this.failRequest(session, request, publicError(publicCode, "The official API did not return a reply. No text was invented."));
+    }
+  }
+
+  private failRequest(session: SessionRecord, request: StoredRequest, error: PublicError): void {
+    if (request.status !== "streaming") {
+      return;
+    }
+    if (request.timer) {
+      clearTimeout(request.timer);
+      request.timer = null;
+    }
+    if (request.abort && !request.abort.signal.aborted) {
+      request.abort.abort();
+    }
+    request.abort = null;
+    request.status = "rejected";
+    this.emit(session, {
+      type: "error",
+      requestId: request.requestId,
+      actionId: request.actionId,
+      simulated: false,
+      error,
+    });
+  }
+
+  private apiTimeoutMs(): number {
+    return this.apiTimeout;
+  }
+
   private executeSend(
     session: SessionRecord,
     action: Extract<GatewayAction, { type: "send_message" }>,
     fingerprint: string,
   ): GatewayResponse {
+    if (this.adapter === "api") {
+      return this.executeApiSend(session, action, fingerprint);
+    }
     if (this.adapter !== "mock") {
       this.rememberTerminalRequest(session, action, "rejected");
       this.emit(session, {
@@ -945,6 +1126,7 @@ export class Gateway {
       messageFingerprint: messageFingerprint(action.modelId, action.text),
       status,
       timer: null,
+      abort: null,
     };
     session.requests.set(request.requestId, request);
     session.requestsByClientId.set(request.clientRequestId, request);
@@ -991,6 +1173,10 @@ export class Gateway {
       clearTimeout(request.timer);
       request.timer = null;
     }
+    if (request.abort && !request.abort.signal.aborted) {
+      request.abort.abort();
+    }
+    request.abort = null;
     request.status = event.type === "completed" ? "completed" : "cancelled";
     this.emit(session, event);
   }
@@ -1067,6 +1253,7 @@ export class Gateway {
       loginState: "unauthenticated",
       loginSimulated: false,
       supportedInputs: [],
+      apiModels: [],
       selectedModelId: null,
       conversation: null,
       actions: new Map(),
@@ -1101,6 +1288,7 @@ export class Gateway {
 
   private capabilities(): Capabilities {
     const simulated = this.adapter === "mock";
+    const api = this.adapter === "api" && (this.anthropic?.configured ?? false);
     return {
       protocolDetection: "supported",
       gatewayAuth: this.token ? "supported" : "not_configured",
@@ -1109,8 +1297,8 @@ export class Gateway {
       eventStream: "supported",
       cancellation: "supported",
       claudeWebsiteLogin: simulated ? "simulated" : "not_configured",
-      liveModelCatalog: simulated ? "simulated" : "not_configured",
-      liveConversation: simulated ? "simulated" : "not_configured",
+      liveModelCatalog: simulated ? "simulated" : api ? "api" : "not_configured",
+      liveConversation: simulated ? "simulated" : api ? "api" : "not_configured",
     };
   }
 
@@ -1145,6 +1333,14 @@ export class Gateway {
         actions.push("login_submit");
       }
     }
+    if (this.adapter === "api") {
+      if (session.apiModels.length > 0) {
+        actions.push("select_model");
+      }
+      if (session.selectedModelId) {
+        actions.push("send_message");
+      }
+    }
     if (this.adapter === "mock") {
       if (
         session.loginState === "unauthenticated" ||
@@ -1170,6 +1366,7 @@ export class Gateway {
 
   private view(session: SessionRecord): SessionView {
     const simulated = this.adapter === "mock";
+    const api = this.adapter === "api" && session.apiModels.length > 0;
     const available = simulated && session.loginState === "authenticated";
     const activeRequestIds = [...session.requests.values()]
       .filter((request) => request.status === "streaming")
@@ -1191,8 +1388,8 @@ export class Gateway {
               simulated: true,
             },
           ]
-        : [],
-      modelsStatus: simulated ? "simulated" : "not_configured",
+        : session.apiModels,
+      modelsStatus: simulated ? "simulated" : api ? "api" : "not_configured",
       selectedModelId: session.selectedModelId,
       conversation: session.conversation,
       activeRequestIds,

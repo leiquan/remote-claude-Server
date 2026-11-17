@@ -31,6 +31,7 @@ const MESSAGES: Record<ErrorCode, string> = {
   event_cursor_invalid: "Last-Event-ID does not match a retained event. Resync is required. The gateway will not resume a send.",
   login_input_unsupported:
     "This session context has no supported login input of that kind. Password login is not supported, and no Claude page binding is verified.",
+  api_upstream_rejected: "The official API did not accept the request. No reply was invented.",
 };
 
 const HTTP_STATUS: Record<ErrorCode, number> = {
@@ -62,6 +63,7 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   navigation_rejected: 409,
   automatic_action_stopped: 409,
   login_input_unsupported: 409,
+  api_upstream_rejected: 502,
 };
 
 export function publicError(code: ErrorCode, message?: string): PublicError {

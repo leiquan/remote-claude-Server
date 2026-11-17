@@ -35,6 +35,7 @@ const app = createGatewayApp({
   mockSettleMs: config.mockSettleMs,
   browserHostRunning: browserHost !== null,
   browserHost,
+  officialApi: config.officialApi,
   audit(record) {
     process.stderr.write(`${JSON.stringify(record)}\n`);
   },

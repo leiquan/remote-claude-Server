@@ -195,7 +195,7 @@ test("placeholder token and short token are not usable credentials", () => {
   assert.equal(placeholder.token.placeholderIgnored, true);
   assert.throws(() => loadConfig({ GATEWAY_ACCESS_TOKEN: "short-token" }), /at least 16/);
   assert.throws(() => loadConfig({ GATEWAY_BASE_PATH: "/gw/../admin" }), /normalized path/);
-  assert.throws(() => loadConfig({ REMOTE_CLAUDE_ADAPTER: "claude" }), /unconfigured, mock, or browser/);
+  assert.throws(() => loadConfig({ REMOTE_CLAUDE_ADAPTER: "claude" }), /unconfigured, mock, browser, or api/);
 });
 
 test("entrypoint serves health without printing a token", async () => {

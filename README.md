@@ -12,6 +12,7 @@ iOS 将来只访问用户自己填写的一个 HTTPS 网关基址。Claude 网�
 - 默认适配器 `unconfigured`：实时登录和实时模型明确返回 `not_configured`，不会假登录，也不会给出假的 Claude 模型列表。
 - 适配器 `browser`：网关认证通过后，可以为该会话打开隔离的本机浏览器上下文，并用 `browser_navigate`、`browser_read`、`browser_click`、`browser_screenshot` 操作允许列表里的页面。登录输入走 `login_submit`，只接受该会话 `supportedInputs` 里的种类。密码不受支持。页面加载和夹具投递都不是 Claude 登录。模型列表和发送仍是 `not_configured`。普通请求登录页被 Cloudflare challenge 拦截，所以不会重试该路由。
 - 适配器 `mock`：只在测试里模拟状态和回声，响应用 `simulated: true` 标出。
+- 适配器 `api`：显式启用后走 Anthropic 官方 Messages API。没有密钥时保持 `not_configured`。模型必须来自供应商列表或经过该列表核对的 `ANTHROPIC_MODEL`。本仓库的测试只打本地替身，没有真实上游调用。
 
 ## 明确没做
 

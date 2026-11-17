@@ -8,9 +8,9 @@ export const PROTOCOL_VERSION = "0";
 export const SIMULATED_MODEL_ID = "sim.echo";
 export const SIMULATED_MODEL_NAME = "Simulated echo (not Claude)";
 
-export type AdapterKind = "unconfigured" | "mock" | "browser";
+export type AdapterKind = "unconfigured" | "mock" | "browser" | "api";
 
-export type CapabilityState = "supported" | "not_configured" | "simulated";
+export type CapabilityState = "supported" | "not_configured" | "simulated" | "api";
 
 export interface Capabilities {
   protocolDetection: "supported";
@@ -20,8 +20,8 @@ export interface Capabilities {
   eventStream: "supported";
   cancellation: "supported";
   claudeWebsiteLogin: "not_configured" | "simulated";
-  liveModelCatalog: "not_configured" | "simulated";
-  liveConversation: "not_configured" | "simulated";
+  liveModelCatalog: "not_configured" | "simulated" | "api";
+  liveConversation: "not_configured" | "simulated" | "api";
 }
 
 export type LoginState =
@@ -85,7 +85,7 @@ export interface SessionView {
   capabilities: Capabilities;
   login: LoginView;
   models: ModelDescriptor[];
-  modelsStatus: "not_configured" | "simulated";
+  modelsStatus: "not_configured" | "simulated" | "api";
   selectedModelId: string | null;
   conversation: ConversationView | null;
   activeRequestIds: string[];
@@ -119,7 +119,8 @@ export type ErrorCode =
   | "browser_host_unavailable"
   | "navigation_rejected"
   | "automatic_action_stopped"
-  | "login_input_unsupported";
+  | "login_input_unsupported"
+  | "api_upstream_rejected";
 
 export interface PublicError {
   code: ErrorCode;
@@ -176,6 +177,13 @@ export interface HealthBody {
     /** This build never navigates the browser to Claude. */
     claudeNavigation: "disabled";
     liveLoginVerified: false;
+  };
+  officialApi: {
+    provider: "anthropic";
+    enabled: boolean;
+    configured: boolean;
+    /** This process has not made a paid or live provider call that we treat as verification. */
+    liveVerified: false;
   };
 }
 

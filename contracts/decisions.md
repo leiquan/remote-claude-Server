@@ -115,6 +115,10 @@ mock 的对话字段 `text` 是最近一次被接受的用户文本，不是模�
 
 因此 `REMOTE_CLAUDE_ADAPTER=browser` 不表示已经登录。浏览器适配器上的删除若关闭了页面，只记录页面停止已尝试、上游状态未知。`browserLogin.passwordLogin` 固定为 `unsupported`，`verified` 固定为 `false`。`automatedAccess` 为 `blocked`，`blocker` 为 `cloudflare_challenge`。`login_input` 返回 `501 login_method_unavailable`，登录状态保持 `unauthenticated`。没有操作者在主机上完成 Google 登录或邮件验证之前，实时模型与对话仍是 `not_configured`。
 
+## 官方 API
+
+`REMOTE_CLAUDE_ADAPTER=api` 才启用 Anthropic 官方 Messages API。密钥只来自进程环境 `ANTHROPIC_API_KEY`，缺省时模型和发送都是 `not_configured`，不编造回复，也不填入默认模型。`GET /v1/models` 的结果才是可选模型；若设置了 `ANTHROPIC_MODEL`，它还必须出现在那份列表里。发送是 `POST /v1/messages`，`stream: true`，只把 `text_delta` 转成网关的 `delta`。`message_stop` 之后才有 `completed`。上游 `error` 事件或非成功响应变成 `error`，不会再补 `completed`。取消和最后一个订阅者断开都会中止这次上游 HTTP 请求；这只表示中止已发出，不表示供应商计算已被确认停止。不重试生成。输出 token 上限默认 256，最大 1024。超时默认 30 秒。日志不记录密钥、提示词、回复、请求头或上游主机。`officialApi.liveVerified` 固定为 `false`。网站登录能力保持 `not_configured`。
+
 ## 明确不做
 
 不调用 Claude 网站或未公开接口，不读取浏览器 cookie，不绕过机器人检查，也不承诺不可检测。实时浏览器登录适配器保持未实现。
