@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Remote Claude · 私人网页</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color-scheme:light dark}*{box-sizing:border-box}body{margin:0;background:Canvas;color:CanvasText}main{max-width:900px;margin:auto;padding:20px}.panel{border:1px solid #8885;border-radius:14px;padding:16px;margin-bottom:14px}input,textarea,button,select{font:inherit;padding:10px;border-radius:8px}input,textarea{width:100%;border:1px solid #8888;background:Canvas;color:CanvasText}button{cursor:pointer;border:1px solid #8888;background:ButtonFace;color:ButtonText}button:disabled{opacity:.45;cursor:not-allowed}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:1}#messages{height:min(55vh,560px);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.message{padding:12px;margin:8px 0;border-radius:10px;background:color-mix(in srgb,CanvasText 7%,Canvas)}.me{border-left:3px solid #647cba}.assistant{border-left:3px solid #568b77}small{opacity:.7}textarea{resize:vertical}h1{font-size:1.4rem}
+</style>
+</head>
+<body><main>
+<h1>Remote Claude</h1>
+<section class="panel">
+<label for="base">网关 HTTPS 地址</label><input id="base" placeholder="https://example.com/gateway" autocomplete="off">
+<label for="token">网关访问令牌（仅保存在当前页面内存）</label><input id="token" type="password" autocomplete="off">
+<div class="row" style="margin-top:12px"><button id="connect">连接并创建会话</button><button id="disconnect">断开</button></div>
+<p id="status" role="status">尚未连接</p><small>此页面只连接你填写的网关。当前仓库的 unconfigured/browser 适配器不支持真实 Claude 对话；mock 仅供测试。</small>
+</section>
+<section class="panel"><div class="row"><strong>对话</strong><select id="model" aria-label="模型" disabled><option>尚无可用模型</option></select></div>
+<div id="messages" aria-live="polite"></div>
+<textarea id="prompt" rows="3" placeholder="输入消息" disabled></textarea>
+<div class="row"><button id="send" disabled>发送</button><button id="cancel" disabled>取消请求</button></div>
+</section>
+</main>
+<script type="module">
+const el=id=>document.getElementById(id);
+let session=null,controller=null,active=null,lastEventId=null,models=[],running=false;
+const state=s=>el("status").textContent=s;
+const append=(kind,value)=>{const node=document.createElement("div");node.className="message "+kind;node.textContent=value;el("messages").append(node);el("messages").scrollTop=el("messages").scrollHeight;return node};
+const headers=()=>({Authorization:"Bearer "+el("token").value});
+const endpoint=p=>el("base").value.replace(/\/$/,"")+p;
+async function json(path,method="GET",body){const r=await fetch(endpoint(path),{method,headers:{...headers(),...(body?{"Content-Type":"application/json"}:{})},body:body?JSON.stringify(body):undefined,cache:"no-store",redirect:"error"});const data=r.status===204?{}:await r.json();if(!r.ok)throw Error(data.error?.code||"HTTP "+r.status);return data}
+function reset(){controller?.abort();controller=null;session=null;active=null;running=false;lastEventId=null;models=[];el("model").replaceChildren(new Option("尚无可用模型",""));el("model").disabled=true;el("prompt").disabled=true;el("send").disabled=true;el("cancel").disabled=true}
+function update(snapshot){models=(snapshot.models||[]).filter(m=>m.available);el("model").replaceChildren(...models.map(m=>new Option(m.displayName,m.id)));const usable=snapshot.claudeUsable===true&&snapshot.capabilities?.liveConversation==="supported";el("model").disabled=!usable||!models.length;el("prompt").disabled=!usable||!models.length;el("send").disabled=!usable||!models.length||running;state(usable?"已连接 · 可用":"网关已连接，但真实 Claude 尚未配置（"+snapshot.adapter+"）")}
+async function listen(id,signal){while(!signal.aborted){try{const h={...headers(),Accept:"text/event-stream"};if(lastEventId)h["Last-Event-ID"]=lastEventId;const r=await fetch(endpoint("/sessions/"+encodeURIComponent(id)+"/events"),{headers:h,signal,cache:"no-store",redirect:"error"});if(!r.ok)throw Error("SSE HTTP "+r.status);const reader=r.body.getReader(),decoder=new TextDecoder();let buffer="";while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf("\n\n"))>=0){const block=buffer.slice(0,end);buffer=buffer.slice(end+2);let idLine="",data="";for(const line of block.split("\n")){if(line.startsWith("id:"))idLine=line.slice(3).trim();if(line.startsWith("data:"))data+=line.slice(5).trim()}if(idLine)lastEventId=idLine;if(!data)continue;let event;try{event=JSON.parse(data)}catch{continue}if(event.requestId!==active?.requestId)continue;if(event.type==="delta"){active.node.textContent+=event.delta||""}if(["completed","cancelled","error","auth_required"].includes(event.type)){running=false;active=null;el("cancel").disabled=true;if(session)update(session);if(event.type!=="completed")append("assistant","请求结束："+event.type)}}}}if(!signal.aborted)throw Error("SSE disconnected")}catch(err){if(signal.aborted)return;state("事件流中断："+err.message+"；请重新连接");return}}}
+el("connect").onclick=async()=>{reset();try{const url=new URL(el("base").value);if(url.protocol!=="https:"&&!["localhost","127.0.0.1"].includes(url.hostname))throw Error("远程网关必须使用 HTTPS");if(!el("token").value)throw Error("请输入访问令牌");const health=await fetch(endpoint("/health"),{cache:"no-store",redirect:"error"}).then(r=>r.json());if(health.serviceId!=="remote-claude-gateway"||health.protocolVersion!=="0")throw Error("不是受支持的网关");const created=await json("/sessions","POST",{});session=created.session;update(session);controller=new AbortController();void listen(session.sessionId,controller.signal)}catch(e){state("连接失败："+e.message)}};
+el("disconnect").onclick=()=>{reset();state("已断开；服务端会话可能仍存在")};
+el("send").onclick=async()=>{if(!session||running)return;const text=el("prompt").value.trim(),modelId=el("model").value;if(!text||!modelId)return;running=true;el("send").disabled=true;el("prompt").value="";append("me",text);const node=append("assistant","");const requestId=crypto.randomUUID();active={requestId,node};el("cancel").disabled=false;try{const data=await json("/sessions/"+session.sessionId+"/actions","POST",{type:"send_message",actionId:crypto.randomUUID(),requestId,clientRequestId:crypto.randomUUID(),modelId,text});session=data.session;if(data.status==="rejected")throw Error(data.error?.code||"rejected")}catch(e){node.textContent="发送失败："+e.message;running=false;active=null;el("cancel").disabled=true;update(session)}};
+el("cancel").onclick=async()=>{if(!session||!active)return;try{await json("/sessions/"+session.sessionId+"/actions","POST",{type:"cancel",actionId:crypto.randomUUID(),requestId:active.requestId})}catch(e){state("取消失败："+e.message)}};
+</script></body></html>
