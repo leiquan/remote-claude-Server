@@ -6,6 +6,7 @@ export interface ClaudeCliOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
+  resumeSessionId?: string;
 }
 
 export interface ClaudeCliResult {
@@ -32,12 +33,14 @@ export async function runClaudeTurn(prompt: string, options: ClaudeCliOptions): 
   const maxOutputBytes = options.maxOutputBytes ?? 2_000_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new TypeError("Invalid timeout.");
   if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) throw new TypeError("Invalid output limit.");
+  if (options.resumeSessionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(options.resumeSessionId)) throw new TypeError("Invalid Claude session ID.");
   if (options.signal?.aborted) throw new ClaudeCliError("cancelled");
 
   return await new Promise<ClaudeCliResult>((resolve, reject) => {
-    const child = spawn(options.executable ?? "claude", [
-      "-p", "--output-format", "json", "--permission-mode", "plan", "--", prompt,
-    ], { cwd: options.cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const args = ["-p", "--output-format", "json", "--permission-mode", "plan"];
+    if (options.resumeSessionId) args.push("--resume", options.resumeSessionId);
+    args.push("--", prompt);
+    const child = spawn(options.executable ?? "claude", args, { cwd: options.cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const chunks: Buffer[] = [];
     let bytes = 0;
     let failure: ClaudeCliError | null = null;
