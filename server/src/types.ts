@@ -8,7 +8,7 @@ export const PROTOCOL_VERSION = "0";
 export const SIMULATED_MODEL_ID = "sim.echo";
 export const SIMULATED_MODEL_NAME = "Simulated echo (not Claude)";
 
-export type AdapterKind = "unconfigured" | "mock" | "browser";
+export type AdapterKind = "unconfigured" | "mock" | "browser" | "cli";
 
 export type CapabilityState = "supported" | "not_configured" | "simulated";
 
@@ -20,8 +20,8 @@ export interface Capabilities {
   eventStream: "supported";
   cancellation: "supported";
   claudeWebsiteLogin: "not_configured" | "simulated";
-  liveModelCatalog: "not_configured" | "simulated";
-  liveConversation: "not_configured" | "simulated";
+  liveModelCatalog: CapabilityState;
+  liveConversation: CapabilityState;
 }
 
 export type LoginState =
@@ -73,12 +73,12 @@ export interface SessionView {
   sessionId: string;
   serviceId: typeof SERVICE_ID;
   protocolVersion: typeof PROTOCOL_VERSION;
-  claudeUsable: false;
+  claudeUsable: boolean;
   adapter: AdapterKind;
   capabilities: Capabilities;
   login: LoginView;
   models: ModelDescriptor[];
-  modelsStatus: "not_configured" | "simulated";
+  modelsStatus: CapabilityState;
   selectedModelId: string | null;
   conversation: ConversationView | null;
   activeRequestIds: string[];
@@ -105,6 +105,7 @@ export type ErrorCode =
   | "unsupported"
   | "claude_login_required"
   | "model_unavailable"
+  | "cli_failed"
   | "not_cancellable"
   | "event_cursor_invalid"
   | "login_method_unavailable"
@@ -147,7 +148,7 @@ export interface ActionResultBody {
 export interface HealthBody {
   serviceId: typeof SERVICE_ID;
   protocolVersion: typeof PROTOCOL_VERSION;
-  /** This milestone never reports Claude as usable, including under the mock adapter. */
+  /** Public health does not make a live Claude request. */
   claudeUsable: false;
   adapter: AdapterKind;
   capabilities: Capabilities;

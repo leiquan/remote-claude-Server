@@ -21,6 +21,7 @@ const MESSAGES: Record<ErrorCode, string> = {
   unsupported: "The gateway could not complete the operation.",
   claude_login_required: "The simulated session is not authenticated.",
   model_unavailable: "The requested model is not available.",
+  cli_failed: "Claude Code did not complete the request. Check CLI authentication and model access on the host.",
   not_cancellable: "The request can no longer be cancelled.",
   login_method_unavailable:
     "Claude has no dedicated account password. Google sign-in or an email link must be completed by the operator on this host. Automated browser login is blocked and has not been verified.",
@@ -52,6 +53,7 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   unsupported: 501,
   claude_login_required: 409,
   model_unavailable: 409,
+  cli_failed: 502,
   not_cancellable: 409,
   event_cursor_invalid: 409,
   login_method_unavailable: 501,

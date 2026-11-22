@@ -15,6 +15,7 @@ export interface GatewayConfig {
   adapter: AdapterKind;
   token: ResolvedToken & { ok: true };
   mockSettleMs: number;
+  cli?: { cwd: string; executable?: string; models: string[] };
   browserHostEnabled: boolean;
 }
 
@@ -81,7 +82,8 @@ export function normalizeAdapter(raw: string | undefined): AdapterKind {
   if (raw === "browser") {
     return "browser";
   }
-  throw new ConfigError("REMOTE_CLAUDE_ADAPTER must be unconfigured, mock, or browser.");
+  if (raw === "cli") return "cli";
+  throw new ConfigError("REMOTE_CLAUDE_ADAPTER must be unconfigured, mock, browser, or cli.");
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): GatewayConfig {
@@ -89,11 +91,23 @@ export function loadConfig(env: NodeJS.ProcessEnv): GatewayConfig {
   if (!token.ok) {
     throw new ConfigError(token.message);
   }
+  const adapter = normalizeAdapter(env.REMOTE_CLAUDE_ADAPTER);
+  let cli: GatewayConfig["cli"];
+  if (adapter === "cli") {
+    const cwd = env.CLAUDE_CLI_CWD?.trim();
+    const models = [...new Set((env.CLAUDE_CLI_MODELS ?? "sonnet,opus,haiku").split(",").map(model => model.trim()))];
+    if (!cwd?.startsWith("/")) throw new ConfigError("CLAUDE_CLI_CWD must be an absolute directory.");
+    if (models.length > 32 || models.some(model => !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(model))) {
+      throw new ConfigError("CLAUDE_CLI_MODELS must contain model IDs separated by commas.");
+    }
+    cli = { cwd, executable: env.CLAUDE_CLI_EXECUTABLE?.trim() || undefined, models };
+  }
   return {
     host: normalizeBindHost(env.GATEWAY_BIND_HOST),
     port: normalizePort(env.GATEWAY_PORT),
     basePath: normalizeBasePath(env.GATEWAY_BASE_PATH),
-    adapter: normalizeAdapter(env.REMOTE_CLAUDE_ADAPTER),
+    adapter,
+    ...(cli ? { cli } : {}),
     token,
     mockSettleMs: 800,
     browserHostEnabled: normalizeBrowserHost(env.BROWSER_HOST),

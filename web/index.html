@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Remote Claude · 私人网页</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color-scheme:light dark}*{box-sizing:border-box}body{margin:0;background:Canvas;color:CanvasText}main{max-width:900px;margin:auto;padding:20px}.panel{border:1px solid #8885;border-radius:14px;padding:16px;margin-bottom:14px}input,textarea,button,select{font:inherit;padding:10px;border-radius:8px}input,textarea{width:100%;border:1px solid #8888;background:Canvas;color:CanvasText}button{cursor:pointer;border:1px solid #8888;background:ButtonFace;color:ButtonText}button:disabled{opacity:.45;cursor:not-allowed}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:1}#messages{height:min(55vh,560px);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.message{padding:12px;margin:8px 0;border-radius:10px;background:color-mix(in srgb,CanvasText 7%,Canvas)}.me{border-left:3px solid #647cba}.assistant{border-left:3px solid #568b77}small{opacity:.7}textarea{resize:vertical}h1{font-size:1.4rem}
+</style>
+</head>
+<body><main>
+<h1>Remote Claude</h1>
+<section class="panel">
+<label for="token">网关访问令牌（仅保存在当前页面内存）</label><input id="token" type="password" autocomplete="off">
+<div class="row" style="margin-top:12px"><button id="connect">连接</button><button id="disconnect">断开</button></div>
+<p id="status" role="status">尚未连接</p>
+</section>
+<section class="panel">
+<div class="row">
+<select id="sessions" aria-label="会话" disabled></select>
+<button id="new" disabled>新建会话</button>
+<button id="delete" disabled>删除会话</button>
+</div>
+<div class="row"><strong>对话</strong><select id="model" aria-label="模型" disabled><option>尚无可用模型</option></select></div>
+<div id="messages" aria-live="polite"></div>
+<textarea id="prompt" rows="3" placeholder="输入消息" disabled></textarea>
+<div class="row"><button id="send" disabled>发送</button><button id="cancel" disabled>取消请求</button></div>
+</section>
+</main>
+<script type="module">
+const el = id => document.getElementById(id);
+const base = location.pathname.replace(/\/web$/, "");
+const state = message => el("status").textContent = message;
+const actionId = () => crypto.randomUUID();
+let token = "", session = null, stream = null, active = null, busy = false;
+
+async function request(path, { method = "GET", body, signal } = {}) {
+  const response = await fetch(base + path, {
+    method, signal, redirect: "error", cache: "no-store",
+    headers: {
+      Authorization: "Bearer " + token,
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (response.status === 204) return {};
+  const data = await response.json();
+  if (!response.ok) throw Error(data.error?.message || "HTTP " + response.status);
+  return data;
+}
+
+function controls() {
+  const idle = Boolean(token) && !busy && !active;
+  const ready = idle && Boolean(stream?.ready) &&
+    session?.capabilities.liveConversation === "supported" && Boolean(el("model").value);
+  el("connect").disabled = Boolean(token) || busy;
+  el("disconnect").disabled = !token || busy;
+  el("token").disabled = Boolean(token) || busy;
+  el("sessions").disabled = !idle || !el("sessions").options.length;
+  el("new").disabled = !idle;
+  el("delete").disabled = !idle || !session;
+  el("model").disabled = !ready;
+  el("prompt").disabled = !ready;
+  el("send").disabled = !ready;
+  el("cancel").disabled = !active || !stream?.ready || busy;
+}
+
+function append(role, text) {
+  const node = document.createElement("div");
+  node.className = "message " + (role === "user" ? "me" : "assistant");
+  node.textContent = text;
+  el("messages").append(node);
+  scrollToReply();
+  return node;
+}
+
+function scrollToReply() {
+  el("messages").scrollTop = el("messages").scrollHeight;
+}
+
+async function list() {
+  const connectedToken = token;
+  const { sessions } = await request("/sessions");
+  if (token !== connectedToken) return [];
+  el("sessions").replaceChildren(...sessions.map((item, index) =>
+    new Option(item.title || "会话 " + (sessions.length - index), item.sessionId)));
+  el("sessions").value = session?.sessionId ?? "";
+  return sessions;
+}
+
+function closeStream() {
+  stream?.controller.abort();
+  stream = null;
+}
+
+async function selectSession(id) {
+  const data = id
+    ? await request("/sessions/" + id)
+    : await request("/sessions", { method: "POST", body: {} });
+  closeStream();
+  session = data.session;
+  el("messages").replaceChildren();
+  for (const message of data.history || []) append(message.role, message.text);
+  el("model").replaceChildren(...session.models.filter(model => model.available).map(model =>
+    new Option(model.displayName, model.id)));
+  if (session.selectedModelId) el("model").value = session.selectedModelId;
+  if (session.capabilities.liveConversation !== "supported") {
+    state("已连接，网关尚未配置 Claude Code");
+    return;
+  }
+  const current = { controller: new AbortController(), ready: false, cursor: "" };
+  stream = current;
+  void listen(session.sessionId, current);
+}
+
+async function listen(id, current) {
+  const { signal } = current.controller;
+  let failures = 0;
+  while (!signal.aborted) {
+    try {
+      const response = await fetch(base + "/sessions/" + id + "/events", {
+        headers: {
+          Authorization: "Bearer " + token,
+          Accept: "text/event-stream",
+          ...(current.cursor ? { "Last-Event-ID": current.cursor } : {}),
+        },
+        redirect: "error", cache: "no-store", signal,
+      });
+      if (response.status === 409 && current.cursor) {
+        current.cursor = "";
+        continue;
+      }
+      if (!response.ok) throw Error("HTTP " + response.status);
+      current.ready = true;
+      state("已连接 Claude Code 网关");
+      controls();
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let pending = "";
+      while (!signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        failures = 0;
+        pending += value;
+        let separator;
+        while ((separator = pending.indexOf("\n\n")) >= 0) {
+          const block = pending.slice(0, separator);
+          pending = pending.slice(separator + 2);
+          const data = block.split("\n").find(line => line.startsWith("data: "));
+          if (!data) continue;
+          const event = JSON.parse(data.slice(6));
+          current.cursor = event.eventId;
+          if (event.requestId !== active?.id) continue;
+          if (event.type === "delta") {
+            if (active.seen.has(event.eventId)) continue;
+            active.seen.add(event.eventId);
+            active.node.textContent += event.delta;
+            scrollToReply();
+          } else {
+            if (event.type !== "completed") {
+              append("assistant", event.error?.message || "回复已取消");
+            }
+            active = null;
+            controls();
+            void list().catch(() => {});
+          }
+        }
+      }
+      throw Error("连接已关闭");
+    } catch (error) {
+      if (signal.aborted) return;
+      current.ready = false;
+      if (++failures >= 3) {
+        if (active) append("assistant", "回复中断，请重新打开会话查看已完成的消息");
+        active = null;
+        state("事件流断开，请重新连接 · " + error.message);
+        controls();
+        return;
+      }
+      state("正在重新连接事件流");
+      controls();
+      await new Promise(resolve => setTimeout(resolve, 600));
+    }
+  }
+}
+
+async function action(type, fields) {
+  return request("/sessions/" + session.sessionId + "/actions", {
+    method: "POST", body: { type, actionId: actionId(), ...fields },
+  });
+}
+
+async function run(operation) {
+  busy = true;
+  controls();
+  try {
+    await operation();
+  } catch (error) {
+    state(error.message);
+  } finally {
+    busy = false;
+    controls();
+  }
+}
+
+function disconnect() {
+  closeStream();
+  token = "";
+  el("token").value = "";
+  session = active = null;
+  for (const id of ["sessions", "model", "messages"]) el(id).replaceChildren();
+  state("已断开");
+  controls();
+}
+
+el("connect").onclick = () => run(async () => {
+  if (!window.isSecureContext) throw Error("请通过 HTTPS 访问网关");
+  token = el("token").value.trim();
+  if (!token) throw Error("请输入网关访问令牌");
+  try {
+    const sessions = await list();
+    await selectSession(sessions[0]?.sessionId);
+    el("sessions").value = session.sessionId;
+    if (!sessions.length) await list();
+  } catch (error) {
+    disconnect();
+    throw error;
+  }
+});
+el("disconnect").onclick = disconnect;
+el("new").onclick = () => run(async () => { await selectSession(); await list(); });
+el("sessions").onchange = () => run(async () => { await selectSession(el("sessions").value); });
+el("delete").onclick = () => {
+  if (!confirm("删除当前会话？")) return;
+  return run(async () => {
+    await request("/sessions/" + session.sessionId, { method: "DELETE" });
+    closeStream();
+    session = null;
+    el("messages").replaceChildren();
+    const sessions = await list();
+    if (sessions.length) {
+      await selectSession(sessions[0].sessionId);
+      el("sessions").value = session.sessionId;
+    } else {
+      state("已删除会话");
+    }
+  });
+};
+el("model").onchange = () => run(async () => {
+  try {
+    session = (await action("select_model", { modelId: el("model").value })).session;
+  } catch (error) {
+    if (session.selectedModelId) el("model").value = session.selectedModelId;
+    throw error;
+  }
+});
+el("send").onclick = () => run(async () => {
+  const text = el("prompt").value.trim();
+  if (!text) return;
+  const modelId = el("model").value;
+  if (session.selectedModelId !== modelId) {
+    session = (await action("select_model", { modelId })).session;
+  }
+  const requestId = actionId();
+  append("user", text);
+  const node = append("assistant", "");
+  active = { id: requestId, node, seen: new Set() };
+  try {
+    await action("send_message", { requestId, clientRequestId: actionId(), modelId, text });
+    el("prompt").value = "";
+  } catch (error) {
+    if (active?.id === requestId) {
+      active = null;
+      node.textContent = error.message;
+    }
+    throw error;
+  }
+});
+el("cancel").onclick = () => run(() => action("cancel", { requestId: active.id }));
+controls();
+</script></body></html>

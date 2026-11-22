@@ -4,7 +4,11 @@
 
 iOS 将来只访问用户自己填写的一个 HTTPS 网关基址。Claude 网站登录如果以后实现，也必须发生在用户自己的 Ubuntu 浏览器主机上。本里程碑没有实现该登录适配器，也没有 Anthropic API key 转发。
 
-## 这个里程碑做了什么
+## 私人 Claude 网页
+
+选择 `REMOTE_CLAUDE_ADAPTER=cli` 后，同源的 `/web` 支持模型切换、会话管理和 SSE 实时回复。Ubuntu 测试配置见 [Claude Code 网关试运行](docs/UBUNTU_CLAUDE_CODE.md)。下文中的浏览器适配器与 Claude Code CLI 使用各自的配置。
+
+## 网关基础能力
 
 - `GET /health` 做网关本地的协议识别。`claudeUsable` 恒为 `false`。
 - 网关访问令牌保护全部控制操作。令牌和 Claude 登录无关。

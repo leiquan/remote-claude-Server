@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
+import type { GatewayConfig } from "./config.ts";
 import type { Socket } from "node:net";
 import { ConfigError, normalizeBasePath } from "./config.ts";
 import { publicError } from "./errors.ts";
@@ -14,6 +16,7 @@ const SESSION_ID = /^ses_[0-9a-f]{32}$/;
 
 export interface AppOptions {
   adapter: AdapterKind;
+  cli?: GatewayConfig["cli"];
   token?: string | null;
   basePath?: string;
   mockSettleMs?: number;
@@ -52,6 +55,7 @@ export function createGatewayApp(options: AppOptions): GatewayApp {
   const basePath = normalizeBasePath(options.basePath);
   const gateway = new Gateway({
     adapter: options.adapter,
+    cli: options.cli,
     token: configuredToken,
     mockSettleMs: options.mockSettleMs,
     audit,
@@ -112,6 +116,17 @@ export function createGatewayApp(options: AppOptions): GatewayApp {
   };
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method === "GET" && req.url?.split("?")[0] === basePath + "/web") {
+      const html = await readFile(new URL("../../web/index.html", import.meta.url));
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      });
+      res.end(html);
+      return;
+    }
     const matched = matchRoute(basePath, req.url);
     if (matched.kind === "invalid") {
       sendJson(res, 400, { error: publicError("invalid_path") });
@@ -143,6 +158,10 @@ export function createGatewayApp(options: AppOptions): GatewayApp {
     }
 
     if (matched.kind === "sessions") {
+      if (req.method === "GET") {
+        writeGateway(res, gateway.listSessions());
+        return;
+      }
       const body = await readJson(req);
       if (!body.ok) {
         sendJson(res, body.status, { error: body.error });
@@ -227,7 +246,7 @@ function matchRoute(basePath: string, rawUrl: string | undefined): RouteMatch {
     return { kind: "health", methods: ["GET"] };
   }
   if (parts.length === 1 && parts[0] === "sessions") {
-    return { kind: "sessions", methods: ["POST"] };
+    return { kind: "sessions", methods: ["GET", "POST"] };
   }
   if (parts.length === 2 && parts[0] === "sessions") {
     return { kind: "session", methods: ["GET", "DELETE"], sessionId: parts[1] };
@@ -339,12 +358,14 @@ function writeSse(
   res.flushHeaders();
   res.write(":\n\n");
   let closed = false;
+  let heartbeat: NodeJS.Timeout | undefined;
   let unsubscribe: () => void = () => undefined;
   const finish = () => {
     if (closed) {
       return;
     }
     closed = true;
+    clearInterval(heartbeat);
     unsubscribe();
     if (!res.writableEnded) {
       res.end();
@@ -355,11 +376,20 @@ function writeSse(
       if (closed || res.writableEnded) {
         return;
       }
+      if (res.writableLength > 1_000_000) {
+        res.destroy();
+        return;
+      }
       res.write(`id: ${event.eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     },
     close: finish,
   };
   unsubscribe = attach(subscriber);
+  heartbeat = setInterval(() => {
+    if (res.writableLength > 1_000_000) res.destroy();
+    else res.write(": heartbeat\n\n");
+  }, 15_000);
+  heartbeat.unref();
   res.socket?.setNoDelay(true);
   // Socket close is the client disconnect. Do not use the request "close"
   // event: that also fires when a request body has been read.

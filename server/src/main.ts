@@ -30,6 +30,7 @@ if (config.browserHostEnabled) {
 
 const app = createGatewayApp({
   adapter: config.adapter,
+  cli: config.cli,
   token: config.token.token,
   basePath: config.basePath,
   mockSettleMs: config.mockSettleMs,

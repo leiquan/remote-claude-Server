@@ -33,6 +33,12 @@
 
 v0 是单操作者模型，不是多用户隔离。一个进程只配置一个 `GATEWAY_ACCESS_TOKEN`，也只有一个网关身份。会话保存该令牌的指纹；指纹不符时按不存在处理。错误令牌会先被认证层拒绝，所以第二个身份无法表示，也不能访问已有会话。持有这个唯一令牌的一方可以看到本进程里的全部会话。
 
+## Claude Code CLI 和网页
+
+`GET /web` 提供同源网页。认证后的 `GET /sessions` 返回当前操作者的会话摘要。`cli` 由操作者在服务器上配置，登录 Claude 的步骤在本机 CLI 完成。模型来自服务器配置。它使用现有的选模型、发送、取消和 SSE 接口。获得成功回复后，单个会话的 `claudeUsable` 为 true。已完成的最近 20 轮可通过单个会话的 GET 接口读取，重启网关清空会话。
+
+CLI 同一会话只允许一个进行中的生成，发送前需要连接事件流。最后一个订阅者断开时，网关取消本地 CLI 任务，`stop.upstream` 为 `unknown`。连接恢复后可以重放保留的 SSE 事件。CLI 失败通过 SSE `error` 报告，错误码为 `cli_failed`。
+
 ## 适配器
 
 `REMOTE_CLAUDE_ADAPTER` 接受 `unconfigured`（默认）、`mock` 和 `browser`。`browser` 不表示已经登录。
